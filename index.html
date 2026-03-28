@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Port Monitor Dashboard</title>
+
+<style>
+body {
+    margin: 0;
+    font-family: "Segoe UI", sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+}
+header { background: #020617; padding: 15px; }
+h1 { color: #38bdf8; }
+
+.container { padding: 20px; }
+
+button {
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: none;
+    margin: 5px;
+    cursor: pointer;
+}
+.csv { background: #22c55e; }
+.pdf { background: #ef4444; color: white; }
+
+input {
+    padding: 8px;
+    margin: 10px 0;
+    border-radius: 6px;
+    border: none;
+}
+
+table {
+    width: 100%;
+    margin-top: 10px;
+    border-collapse: collapse;
+    background: #1e293b;
+}
+th, td { padding: 10px; }
+th { background: #020617; cursor: pointer; }
+td { border-bottom: 1px solid #334155; }
+
+tr:hover { background: #334155; }
+
+.pagination {
+    margin-top: 15px;
+    text-align: center;
+}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+
+</head>
+
+<body>
+
+<header>
+<h1>🔐 Port Monitor Dashboard</h1>
+</header>
+
+<div class="container">
+
+<button class="csv" onclick="downloadCSV()">⬇ CSV</button> <button class="pdf" onclick="downloadPDF()">⬇ PDF</button>
+
+<br>
+
+<input id="search" placeholder="Search..." onkeyup="searchData()">
+
+<table>
+<thead>
+<tr>
+<th onclick="sortData('direction')">Direction</th>
+<th onclick="sortData('ipVersion')">IP</th>
+<th onclick="sortData('protocol')">Protocol</th>
+<th onclick="sortData('scope')">Scope</th>
+<th onclick="sortData('localPort')">Port</th>
+<th onclick="sortData('remote')">Remote</th>
+</tr>
+</thead>
+<tbody id="data"></tbody>
+</table>
+
+<div class="pagination">
+    <button onclick="prevPage()">⬅ Prev</button>
+    <span id="pageInfo"></span>
+    <button onclick="nextPage()">Next ➡</button>
+</div>
+
+<canvas id="portChart"></canvas>
+
+</div>
+
+<script>
+let globalData = [];
+let filteredData = [];
+let currentSort = { key: null, asc: true };
+
+let currentPage = 1;
+const rowsPerPage = 25;
+
+// LOAD DATA
+async function loadData() {
+    const res = await fetch("http://localhost:3000/api/ports");
+    const data = await res.json();
+
+    globalData = data.map(r => ({
+        direction: r.direction,
+        ipVersion: r.ipVersion,
+        protocol: r.protocol,
+        scope: r.scope?.trim(),
+        localPort: Number(r.localPort),
+        remote: r.remote
+    }));
+
+    filteredData = [...globalData];
+
+    render();
+    chart(globalData);
+}
+
+// PAGINATION RENDER
+function render() {
+    const table = document.getElementById("data");
+    table.innerHTML = "";
+
+    const start = (currentPage - 1) * rowsPerPage;
+    const end = start + rowsPerPage;
+
+    const pageData = filteredData.slice(start, end);
+
+    pageData.forEach(r => {
+        table.innerHTML += `
+        <tr>
+        <td>${r.direction}</td>
+        <td>${r.ipVersion}</td>
+        <td>${r.protocol}</td>
+        <td>${r.scope}</td>
+        <td>${r.localPort}</td>
+        <td>${r.remote}</td>
+        </tr>`;
+    });
+
+    document.getElementById("pageInfo").innerText =
+        `Page ${currentPage} / ${Math.ceil(filteredData.length / rowsPerPage)}`;
+}
+
+// NEXT / PREV
+function nextPage() {
+    if (currentPage < Math.ceil(filteredData.length / rowsPerPage)) {
+        currentPage++;
+        render();
+    }
+}
+
+function prevPage() {
+    if (currentPage > 1) {
+        currentPage--;
+        render();
+    }
+}
+
+// SEARCH
+function searchData() {
+    const val = document.getElementById("search").value.toLowerCase();
+
+    filteredData = globalData.filter(r =>
+        Object.values(r).join(" ").toLowerCase().includes(val)
+    );
+
+    currentPage = 1;
+    render();
+}
+
+// SORT
+function sortData(key) {
+    currentSort.asc = currentSort.key === key ? !currentSort.asc : true;
+    currentSort.key = key;
+
+    filteredData.sort((a,b)=>{
+        let A = a[key], B = b[key];
+
+        if(key==="localPort") return currentSort.asc ? A-B : B-A;
+
+        A = A.toString().toLowerCase();
+        B = B.toString().toLowerCase();
+
+        if(A<B) return currentSort.asc?-1:1;
+        if(A>B) return currentSort.asc?1:-1;
+        return 0;
+    });
+
+    render();
+}
+
+// CSV
+function downloadCSV() {
+    let csv = "Direction,IP,Protocol,Scope,Port,Remote\n";
+    globalData.forEach(r => {
+        csv += `${r.direction},${r.ipVersion},${r.protocol},${r.scope},${r.localPort},${r.remote}\n`;
+    });
+
+    const blob = new Blob([csv]);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "Port_Report.csv";
+    a.click();
+}
+
+// PDF
+function downloadPDF() {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+
+    const columns = ["Direction","IP","Protocol","Scope","Port","Remote"];
+    const rows = globalData.map(r => [
+        r.direction, r.ipVersion, r.protocol, r.scope, r.localPort, r.remote
+    ]);
+
+    doc.text("Port Monitor Report", 14, 15);
+
+    doc.autoTable({
+        head: [columns],
+        body: rows,
+        startY: 20
+    });
+
+    doc.save("Port_Report.pdf");
+}
+
+// CHART
+let chartObj;
+function chart(data){
+    const count = {};
+    data.forEach(d=>{
+        count[d.localPort]=(count[d.localPort]||0)+1;
+    });
+
+    chartObj = new Chart(document.getElementById("portChart"), {
+        type:"bar",
+        data:{
+            labels:Object.keys(count),
+            datasets:[{label:"Port Usage", data:Object.values(count)}]
+        }
+    });
+}
+
+// INIT
+loadData();
+</script>
+
+</body>
+</html>
